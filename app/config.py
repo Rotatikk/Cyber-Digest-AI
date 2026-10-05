@@ -13,6 +13,7 @@ MSK = ZoneInfo("Europe/Moscow")
 class Settings:
     ai_mode: str = os.getenv("AI_MODE", "openai")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-6-luna")
+    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "").strip()
     max_ai_calls: int = int(os.getenv("MAX_AI_CALLS", "12"))
     openai_timeout: float = float(os.getenv("OPENAI_TIMEOUT", "60"))
 

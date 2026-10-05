@@ -46,3 +46,10 @@ def test_openai_factory_defaults_to_openai(monkeypatch):
     from app.config import Settings
     assert Settings().ai_mode in {"openai", "mock"}
 
+
+
+def test_settings_base_url_can_be_empty(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    from app.config import Settings
+    assert Settings().openai_base_url == ""
+

@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
+
+# HTTPX accepts socks5:// and socks5h://, not the generic socks:// scheme.
+# Normalize common proxy environment variables before constructing the OpenAI client.
+for _name in (
+    "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+):
+    _value = os.getenv(_name)
+    if _value and _value.startswith("socks://"):
+        os.environ[_name] = "socks5://" + _value[len("socks://"): ]
+
 from openai import OpenAI
 
 from app.ai.base import AIProvider
@@ -18,8 +29,23 @@ SYSTEM = """
 """.strip()
 
 class OpenAIProvider(AIProvider):
-    def __init__(self, model: str, api_key: str, max_calls: int = 12, timeout: float = 60.0):
-        self.client = OpenAI(api_key=api_key, max_retries=0, timeout=timeout, base_url="https://darkapi.shop/v1")
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        max_calls: int = 12,
+        timeout: float = 60.0,
+        base_url: str | None = None,
+    ):
+        client_kwargs = {
+            "api_key": api_key,
+            "max_retries": 0,
+            "timeout": timeout,
+        }
+        # Empty OPENAI_BASE_URL means: use the official OpenAI endpoint.
+        if base_url and base_url.strip():
+            client_kwargs["base_url"] = base_url.strip().rstrip("/")
+        self.client = OpenAI(**client_kwargs)
         self.model = model
         self.max_calls = max_calls
         self.calls = 0

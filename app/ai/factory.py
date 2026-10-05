@@ -9,5 +9,11 @@ def get_ai(settings: Settings) -> AIProvider:
         if not settings.openai_api_key:
             raise RuntimeError("AI_MODE=openai, но OPENAI_API_KEY не задан")
         from app.ai.openai_provider import OpenAIProvider
-        return OpenAIProvider(settings.openai_model, settings.openai_api_key, settings.max_ai_calls, settings.openai_timeout)
+        return OpenAIProvider(
+            settings.openai_model,
+            settings.openai_api_key,
+            settings.max_ai_calls,
+            settings.openai_timeout,
+            settings.openai_base_url,
+        )
     raise RuntimeError(f"Неизвестный AI_MODE: {settings.ai_mode}. Используйте mock или openai.")
