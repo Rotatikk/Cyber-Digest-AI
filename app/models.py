@@ -75,3 +75,27 @@ class LogEntry(BaseModel):
     event_group: str | None = None
     reason: str = ""
     errors: list[str] = Field(default_factory=list)
+
+
+class ClassificationItem(BaseModel):
+    article_id: str
+    relevant: bool
+    reason: str
+
+
+class ClassificationBatch(BaseModel):
+    items: list[ClassificationItem]
+
+
+class ClusterGroup(BaseModel):
+    cluster_id: str
+    article_ids: list[str]
+    reason: str = ""
+    preliminary_relevance: int = Field(default=0, ge=0, le=5)
+    preliminary_impact: int = Field(default=0, ge=0, le=5)
+    preliminary_scale: int = Field(default=0, ge=0, le=5)
+    preliminary_urgency: int = Field(default=0, ge=0, le=5)
+
+
+class ClusterBatch(BaseModel):
+    groups: list[ClusterGroup]

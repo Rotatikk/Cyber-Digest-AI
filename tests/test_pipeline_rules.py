@@ -40,3 +40,9 @@ def test_prompt_injection_is_not_executed_by_mock():
     result = MockAI().classify(malicious)
     assert result.relevant is True
     assert "attacker@example.com" not in result.reason
+
+
+def test_openai_factory_defaults_to_openai(monkeypatch):
+    from app.config import Settings
+    assert Settings().ai_mode in {"openai", "mock"}
+

@@ -55,15 +55,26 @@ class MockAI(AIProvider):
         if not events:
             msg = f"За период до {control_time} подходящих событий по информационной безопасности не найдено."
             return GeneratedPackage(digest=msg, post=msg, email_subject=f"Дайджест ИБ до {control_time}")
-        blocks = []
-        for idx, e in enumerate(events, 1):
-            facts = " ".join(f.text for f in e.facts[:2])
-            consequence = " ".join(e.consequences[:1])
+
+        def block(e: ExtractedEvent, concise: bool = False) -> str:
+            fact = (e.facts[0].text if e.facts else e.title).replace("\n", " ")
+            fact = fact[:260] if concise else fact[:700]
+            consequence = (e.consequences[0] if e.consequences else "Сведения о последствиях отсутствуют в тестовых данных.")[:180]
             source_lines = "; ".join(
                 f"{src.source}, {src.published_at.isoformat() if src.published_at else 'дата не указана'}, ID {src.article_id}, {src.url}"
                 for src in e.sources
             )
-            blocks.append(f"{idx}. {e.title}. {facts} Последствия: {consequence} Источники: {source_lines}")
-        digest = f"Дайджест за период до {control_time}.\n\n" + "\n\n".join(blocks)
-        post = "\n\n".join(blocks)
+            return f"{e.title}. {fact} Последствия: {consequence} Источники: {source_lines}"
+
+        digest_blocks = [f"{idx}. {block(e)}" for idx, e in enumerate(events, 1)]
+        digest = f"Дайджест за период до {control_time}.\nНайдено событий: {len(events)}.\n\n" + "\n\n".join(digest_blocks)
+
+        # Тестовый генератор гарантирует лимит поста. В реальном режиме лимит проверяет validator.
+        post_parts = []
+        for idx, e in enumerate(events, 1):
+            post_parts.append(f"{idx}. {block(e, concise=True)}")
+        post = "\n\n".join(post_parts)
+        if len(post) > 2000:
+            post = post[:1960].rstrip() + "\n[Пост сокращен тестовым генератором до лимита 2000 знаков.]"
+
         return GeneratedPackage(digest=digest, post=post, email_subject=f"Дайджест ИБ до {control_time}")

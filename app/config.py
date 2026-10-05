@@ -7,13 +7,14 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
-
 MSK = ZoneInfo("Europe/Moscow")
 
 @dataclass(frozen=True)
 class Settings:
-    ai_mode: str = os.getenv("AI_MODE", "mock")
+    ai_mode: str = os.getenv("AI_MODE", "openai")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-6-luna")
+    max_ai_calls: int = int(os.getenv("MAX_AI_CALLS", "12"))
+    openai_timeout: float = float(os.getenv("OPENAI_TIMEOUT", "60"))
 
     @property
     def openai_api_key(self) -> str | None:

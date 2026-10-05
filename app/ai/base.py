@@ -15,3 +15,9 @@ class AIProvider(ABC):
 
     @abstractmethod
     def generate_package(self, events: list[ExtractedEvent], control_time: str) -> GeneratedPackage: ...
+
+    def classify_many(self, articles: list[Article]) -> list[Classification]:
+        return [self.classify(a) for a in articles]
+
+    def extract_events(self, clusters: list[tuple[str, list[Article]]]) -> dict[str, ExtractedEvent]:
+        return {event_id: self.extract_event(articles, event_id) for event_id, articles in clusters}

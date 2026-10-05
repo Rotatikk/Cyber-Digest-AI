@@ -22,7 +22,8 @@ st.caption("MVP по ТЗ: отбор, объединение событий, ra
 
 uploaded = st.file_uploader("Набор публикаций", type=["json", "csv", "xlsx"])
 control_time = st.text_input("Контрольное время MSK", "2026-10-03T12:00:00+03:00")
-mode = st.selectbox("AI mode", ["mock", "openai"])
+mode = st.selectbox("AI mode", ["openai", "mock"], index=0)
+st.caption("OpenAI-режим ограничен MAX_AI_CALLS. Текущее значение: " + __import__("os").getenv("MAX_AI_CALLS", "12"))
 
 if uploaded and st.button("Запустить"):
     suffix = Path(uploaded.name).suffix
@@ -35,6 +36,7 @@ if uploaded and st.button("Запустить"):
     st.metric("Публикаций", result["articles_total"])
     st.metric("Событий", len(result["events"]))
     st.metric("Выбрано", len(result["selected"]))
+    st.metric("LLM вызовов", result["ai_usage"].get("ai_calls"))
     st.subheader("Дайджест")
     st.text_area("Email preview", result["package"].digest, height=450)
     st.subheader("Пост")
