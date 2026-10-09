@@ -18,7 +18,7 @@ from app.validation.checks import validate_report
 from app.generation.repair import repair_generated_package
 
 CLASSIFY_BATCH_SIZE = 30
-PROMPT_VERSION = "2.1"
+PROMPT_VERSION = "2.2"
 
 
 def _event_from_extracted(cluster, extracted: ExtractedEvent) -> Event:
@@ -155,14 +155,34 @@ def run(input_path: str, control_time: str, settings: Settings | None = None, ou
         ]
         package = ai.generate_package(selected_payload, control.isoformat())
         package = repair_generated_package(package, selected, control.isoformat())
-        report = validate_report(package, selected)
-
-        if settings.verify_with_ai and settings.ai_mode == "openai":
-            package_check = ai.verify_package(package, selected)
-            report.package_check = package_check
-            if not package_check.passed:
-                report.errors.extend(f"ai_fact_check:{x}" for x in package_check.violations)
-                report.passed = False
+        retry_attempts = 0
+        retry_limit = settings.validation_retry_count if settings.retry_on_validation_error else 0
+        while True:
+            report = validate_report(package, selected)
+            if settings.verify_with_ai and settings.ai_mode == "openai":
+                try:
+                    package_check = ai.verify_package(package, selected)
+                    report.package_check = package_check
+                    if not package_check.passed:
+                        report.errors.extend(f"ai_fact_check:{x}" for x in package_check.violations)
+                        report.passed = False
+                except Exception as exc:
+                    # A failed verifier is not a successful fact-check; keep artifacts and report the issue.
+                    report.warnings.append(f"ai_fact_check_unavailable:{type(exc).__name__}: {exc}")
+                    report.passed = False
+            retryable_failure = bool(report.errors) or (
+                report.package_check is not None and not report.package_check.passed
+            )
+            if report.passed or not retryable_failure or retry_attempts >= retry_limit:
+                break
+            feedback = list(dict.fromkeys(report.errors + report.warnings))
+            try:
+                package = ai.regenerate_package(selected_payload, control.isoformat(), package, feedback)
+                package = repair_generated_package(package, selected, control.isoformat())
+                retry_attempts += 1
+            except Exception as exc:
+                report.warnings.append(f"regeneration_failed:{type(exc).__name__}: {exc}")
+                break
 
     finished_time = datetime.now().astimezone()
     usage = {
@@ -172,7 +192,13 @@ def run(input_path: str, control_time: str, settings: Settings | None = None, ou
     if isinstance(usage.get("usage"), dict):
         usage["estimated_cost"] = _cost(usage["usage"], settings)
     usage["verify_with_ai"] = settings.verify_with_ai
+    usage["retry_on_validation_error"] = settings.retry_on_validation_error
+    usage["validation_retry_count"] = settings.validation_retry_count if settings.retry_on_validation_error else 0
+    usage["validation_retry_attempts"] = retry_attempts if relevant else 0
     usage["max_ai_calls"] = settings.max_ai_calls
+    usage["max_preselect_clusters"] = settings.max_preselect_clusters
+    usage["openai_timeout"] = settings.openai_timeout
+    usage["retry_requests"] = settings.retry_requests
 
     write_log(logs, out / "processing_log.csv")
     (out / "digest.txt").write_text(package.digest, encoding="utf-8")
@@ -201,6 +227,10 @@ def run(input_path: str, control_time: str, settings: Settings | None = None, ou
         prompt_version=settings.prompt_version or PROMPT_VERSION,
         max_ai_calls=settings.max_ai_calls,
         max_preselect_clusters=settings.max_preselect_clusters,
+        extraction_batch_size=settings.extraction_batch_size,
+        openai_json_mode=settings.openai_json_mode,
+        openai_timeout=settings.openai_timeout,
+        retry_requests=settings.retry_requests,
         ai_calls=usage.get("ai_calls") or 0,
         usage=usage,
         articles_total=len(articles),
@@ -218,9 +248,8 @@ def run(input_path: str, control_time: str, settings: Settings | None = None, ou
         encoding="utf-8",
     )
 
-    if not report.passed:
-        raise RuntimeError(f"Validation failed: {report.errors}")
-
+    # Validation failures are recorded and surfaced to the UI/CLI, not raised.
+    # This preserves outputs and audit artifacts for review/debugging.
     return {
         "run_id": run_id,
         "articles_total": len(articles),

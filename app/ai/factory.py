@@ -15,5 +15,8 @@ def get_ai(settings: Settings) -> AIProvider:
             settings.max_ai_calls,
             settings.openai_timeout,
             settings.openai_base_url,
+            settings.extraction_batch_size,
+            settings.openai_json_mode,
+            settings.retry_requests,
         )
     raise RuntimeError(f"Неизвестный AI_MODE: {settings.ai_mode}. Используйте mock или openai.")

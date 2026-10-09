@@ -141,12 +141,14 @@ class MockAI(AIProvider):
         def digest_block(e: ExtractedEvent, idx: int) -> str:
             fact = (e.facts[0].text if e.facts else e.title).replace("\n", " ")[:360]
             consequence = (e.consequences[0] if e.consequences else "Сведения о последствиях отсутствуют.")[:110]
-            return f"{idx}. {e.title}. {fact} Последствия: {consequence} Источники: {source_line(e)}"
+            caveats = (" Оговорки: " + " ".join(c.strip() for c in e.caveats if c.strip())) if e.caveats else ""
+            return f"{idx}. {e.title}. {fact} Последствия: {consequence}{caveats} Источники: {source_line(e)}"
 
         def post_block(e: ExtractedEvent, idx: int) -> str:
             fact = (e.facts[0].text if e.facts else e.title).replace("\n", " ")[:170]
             urls = ", ".join(src.url for src in e.sources)
-            return f"{idx}. {e.title}. {fact} Источники: {urls}"
+            caveats = (" Оговорки: " + " ".join(c.strip() for c in e.caveats if c.strip())) if e.caveats else ""
+            return f"{idx}. {e.title}. {fact}{caveats} Источники: {urls}"
 
         digest = f"Дайджест за период последних 24 часов до {control_time}. Событий: {len(events)}.\n\n" + "\n\n".join(digest_block(e, i) for i, e in enumerate(events, 1))
         post = "\n\n".join(post_block(e, i) for i, e in enumerate(events, 1))

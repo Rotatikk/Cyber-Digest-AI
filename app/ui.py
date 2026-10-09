@@ -16,6 +16,15 @@ import streamlit as st
 from app.pipeline import run
 from app.config import Settings
 
+def _limit_input_value(name: str) -> int:
+    raw = os.getenv(name, "0").strip().lower()
+    if raw in {"", "0", "none", "null", "unlimited", "без лимита", "-1"}:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
 st.set_page_config(page_title="Cyber Digest AI", layout="wide")
 st.title("Cyber Digest AI")
 st.caption("Прототип по ТЗ: период 24 часа, релевантность, события, TOP-5, evidence, fact-check и audit")
@@ -25,10 +34,30 @@ with st.sidebar:
     mode = st.selectbox("AI mode", ["openai", "mock"], index=0)
     model = st.text_input("OpenAI model", os.getenv("OPENAI_MODEL", "gpt-6-luna"))
     base_url = st.text_input("OPENAI_BASE_URL", os.getenv("OPENAI_BASE_URL", ""), help="Пусто = официальный endpoint OpenAI")
-    max_calls = st.number_input("Максимум AI-вызовов", min_value=1, max_value=50, value=int(os.getenv("MAX_AI_CALLS", "12")))
-    max_preselect = st.number_input("Максимум кандидатов на извлечение", min_value=5, max_value=10, value=int(os.getenv("MAX_PRESELECT_CLUSTERS", "6")))
+    max_calls = st.number_input(
+        "Максимум AI-вызовов (0 = без лимита)", min_value=0, max_value=10000,
+        value=_limit_input_value("MAX_AI_CALLS"), step=1,
+        help="Без лимита повышается риск непредвиденных расходов на API.",
+    )
+    max_preselect = st.number_input(
+        "Кандидаты на извлечение (0 = все)", min_value=0, max_value=10000,
+        value=_limit_input_value("MAX_PRESELECT_CLUSTERS"), step=1,
+        help="Ноль означает извлекать все предварительно найденные кластеры.",
+    )
+    openai_timeout = st.number_input(
+        "Таймаут одного API-запроса, секунд", min_value=1.0, max_value=3600.0,
+        value=float(os.getenv("OPENAI_TIMEOUT", "60") or "60"), step=5.0,
+        help="Максимальное ожидание ответа на один запрос. Например, 120 секунд.",
+    )
+    retry_requests = st.checkbox(
+        "Повторять запросы при временных ошибках API",
+        value=os.getenv("OPENAI_RETRY_REQUESTS", "0").strip().lower() not in {"0", "false", "no", "off", ""},
+        help="Включает до 2 автоматических повторов на временных сетевых/серверных ошибках. Не включает повторную генерацию после факт-чека.",
+    )
     verify_ai = st.checkbox("AI fact-check финального текста", value=os.getenv("VERIFY_WITH_AI", "1") not in {"0", "false", "no"})
-    st.caption("При достижении лимита новые платные запросы не выполняются.")
+    retry_validation = st.checkbox("Перегенерировать текст при ошибках проверки", value=os.getenv("RETRY_ON_VALIDATION_ERROR", "1") not in {"0", "false", "no"}, help="Повторная генерация использует дополнительные AI-вызовы и токены.")
+    retry_count = st.number_input("Максимум повторных генераций", min_value=0, max_value=2, value=max(0, min(2, int(os.getenv("VALIDATION_RETRY_COUNT", "1")))), disabled=not retry_validation)
+    st.caption("Положительный лимит останавливает новые AI-вызовы после его достижения. Значение 0 означает отсутствие лимита.")
 
 uploaded = st.file_uploader("Набор публикаций", type=["json", "csv", "xlsx"])
 control_time = st.text_input("Контрольное время MSK", "2026-10-04T12:00:00+03:00")
@@ -46,9 +75,13 @@ else:
             ai_mode=mode,
             openai_model=model,
             openai_base_url=base_url.strip(),
-            max_ai_calls=int(max_calls),
-            max_preselect_clusters=int(max_preselect),
+            max_ai_calls=int(max_calls) if int(max_calls) > 0 else None,
+            max_preselect_clusters=int(max_preselect) if int(max_preselect) > 0 else None,
+            openai_timeout=float(openai_timeout),
+            retry_requests=retry_requests,
             verify_with_ai=verify_ai,
+            retry_on_validation_error=retry_validation,
+            validation_retry_count=int(retry_count),
         )
 
         try:
@@ -69,6 +102,21 @@ else:
         ]
         for col, (label, value) in zip(cols, metrics):
             col.metric(label, value)
+
+        st.caption(f"Повторных генераций после проверки: {result['ai_usage'].get('validation_retry_attempts', 0)}")
+        st.caption(
+            f"Таймаут API: {settings.openai_timeout:g} с; автоповторы: "
+            f"{'включены' if settings.retry_requests else 'выключены'}; "
+            f"лимит AI-вызовов: {settings.max_ai_calls if settings.max_ai_calls is not None else 'без лимита'}; "
+            f"кандидаты: {settings.max_preselect_clusters if settings.max_preselect_clusters is not None else 'все'}"
+        )
+
+        if result.get("validation_errors"):
+            st.error("Проверка не пройдена. Результат сохранён для анализа, но не следует публиковать его без исправления.")
+            for error in result["validation_errors"]:
+                st.write(f"- {error}")
+        elif not result.get("validation_report").passed:
+            st.warning("Факт-чек не завершился успешно. Результат сохранён, но требует ручной проверки.")
 
         warnings = result.get("validation_warnings", [])
         if warnings:

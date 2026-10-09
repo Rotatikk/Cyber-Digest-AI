@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.models import Event, GeneratedPackage
 from app.validation.evidence import strip_urls
 
@@ -56,6 +58,63 @@ def _event_present(text: str, event: Event) -> bool:
     return bool(title and title in ' '.join((text or '').lower().split()))
 
 
+def _place_caveats_in_event_block(text: str, event: Event, index: int, is_post: bool) -> str:
+    caveats = [c.strip() for c in event.caveats if c and c.strip()]
+    if not caveats:
+        return text
+
+    paragraphs = [p.strip() for p in (text or '').split('\n\n') if p.strip()]
+    title = ' '.join((event.title or '').lower().split())
+
+    def contains_title(paragraph: str) -> bool:
+        return bool(title and title in ' '.join(paragraph.lower().split()))
+
+    # If the model included only a source URL but omitted the event title, add a
+    # canonical event block so the caveats have an unambiguous home.
+    if not any(contains_title(p) for p in paragraphs):
+        paragraphs.append(_post_block(event, index) if is_post else _digest_block(event, index))
+
+    for caveat in caveats:
+        target = next((i for i, p in enumerate(paragraphs) if contains_title(p)), None)
+        if target is None:
+            paragraphs.append((_post_block(event, index) if is_post else _digest_block(event, index)))
+            target = len(paragraphs) - 1
+
+        caveat_lower = caveat.lower()
+        # Remove duplicate exact text from other paragraphs (commonly a trailing
+        # global "Оговорки" section), then keep it next to the matching event.
+        for i, paragraph in enumerate(paragraphs):
+            if i == target or caveat_lower not in paragraph.lower():
+                continue
+            # Do not remove a caveat already embedded in another event block.
+            # Only move it out of an explicitly-labelled trailing note section.
+            is_footer = bool(re.match(
+                r'(?is)^\s*(?:(?:общие\s+)?оговорки|оговорка\s+по\s+событию|примечания?|дисклеймер)\b',
+                paragraph,
+            ))
+            if not is_footer:
+                continue
+            cleaned = re.sub(re.escape(caveat), '', paragraph, flags=re.IGNORECASE)
+            cleaned = re.sub(r'(?i)\b(?:общие\s+)?оговорки(?:\s+по\s+событиям?)?\s*[:\-]?\s*', '', cleaned)
+            cleaned = re.sub(r'[ \t]+', ' ', cleaned).strip(' \t:;,-')
+            if cleaned and cleaned not in {'.', '-', '—'}:
+                paragraphs[i] = cleaned
+            else:
+                paragraphs[i] = ''
+
+        # Re-evaluate target after potential paragraph changes/removals.
+        target = next((i for i, p in enumerate(paragraphs) if contains_title(p)), None)
+        if target is None:
+            paragraphs.append((_post_block(event, index) if is_post else _digest_block(event, index)))
+            target = len(paragraphs) - 1
+        if caveat_lower not in paragraphs[target].lower():
+            paragraphs[target] = paragraphs[target].rstrip() + f' Оговорки: {caveat}'
+
+        paragraphs = [p.strip() for p in paragraphs if p.strip()]
+
+    return '\n\n'.join(paragraphs)
+
+
 def repair_generated_package(package: GeneratedPackage, selected: list[Event], control_time: str) -> GeneratedPackage:
     """Repair omissions deterministically without another LLM call.
 
@@ -100,18 +159,11 @@ def repair_generated_package(package: GeneratedPackage, selected: list[Event], c
     if missing_post_urls:
         post += '\n\nИсточники: ' + ', '.join(dict.fromkeys(missing_post_urls))
 
-    # Ensure caveats are not silently dropped from either representation.
-    for event in selected:
-        if not event.caveats:
-            continue
-        caveats = ' '.join(c.strip() for c in event.caveats if c.strip())
-        if not caveats:
-            continue
-        marker = caveats.lower()
-        if marker not in digest.lower():
-            digest += f"\n\nОговорка по событию «{event.title}»: {caveats}"
-        if marker not in post.lower():
-            post += f"\n\nОговорка по событию «{event.title}»: {caveats}"
+    # Put each event's caveats directly into the corresponding event block,
+    # including moving exact caveat text out of an orphaned email-footer section.
+    for index, event in enumerate(selected, 1):
+        digest = _place_caveats_in_event_block(digest, event, index, is_post=False)
+        post = _place_caveats_in_event_block(post, event, index, is_post=True)
 
     # If the model response is over a limit after repair, build a deterministic
     # compact package from the selected events rather than truncating facts.

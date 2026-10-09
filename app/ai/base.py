@@ -26,6 +26,10 @@ class AIProvider(ABC):
     def cluster_all(self, articles: list[Article], buckets: dict[str, list[Article]]) -> ClusterBatch:
         raise AttributeError("AI adapter does not implement cluster_all")
 
+    def regenerate_package(self, events: list[ExtractedEvent], control_time: str, previous: GeneratedPackage, errors: list[str]) -> GeneratedPackage:
+        """Fallback regeneration for providers without feedback-aware generation."""
+        return self.generate_package(events, control_time)
+
     def verify_package(self, package: GeneratedPackage, events: list[Event]) -> PackageCheck:
         # Deterministic fallback; OpenAI adapter overrides this with one batched LLM check.
         from app.validation.evidence import deterministic_package_check

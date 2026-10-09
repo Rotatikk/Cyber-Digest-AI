@@ -87,6 +87,15 @@ class ExtractedEvent(BaseModel):
     evidence_quality_evidence: str = ""
 
 
+class ExtractedEventBatchItem(BaseModel):
+    event_id: str
+    event: ExtractedEvent
+
+
+class ExtractedEventBatch(BaseModel):
+    events: list[ExtractedEventBatchItem]
+
+
 class GeneratedPackage(BaseModel):
     digest: str
     post: str
@@ -123,8 +132,12 @@ class RunManifest(BaseModel):
     model: str
     base_url_set: bool = False
     prompt_version: str = "2.0"
-    max_ai_calls: int = 0
-    max_preselect_clusters: int = 6
+    max_ai_calls: int | None = None
+    max_preselect_clusters: int | None = None
+    extraction_batch_size: int = 2
+    openai_json_mode: bool = True
+    openai_timeout: float = 60.0
+    retry_requests: bool = False
     ai_calls: int = 0
     usage: dict = Field(default_factory=dict)
     articles_total: int = 0

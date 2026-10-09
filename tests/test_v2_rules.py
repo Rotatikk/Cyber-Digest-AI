@@ -102,10 +102,44 @@ def test_full_mock_run_preserves_conflict_and_ignores_injection(tmp_path):
     assert manifest["validation_passed"] is True
 
 
-def test_preselect_cluster_budget_is_finite():
+def test_extraction_and_ai_call_limits_are_unlimited_by_default():
     from app.config import Settings
-    assert Settings().max_preselect_clusters <= 6
+    settings = Settings()
+    assert settings.max_preselect_clusters is None
+    assert settings.max_ai_calls is None
+    assert settings.openai_timeout == 60
+    assert settings.retry_requests is False
+    explicit_unlimited = Settings(max_ai_calls=0, max_preselect_clusters=0)
+    assert explicit_unlimited.max_ai_calls is None
+    assert explicit_unlimited.max_preselect_clusters is None
 
+
+
+def test_caveats_are_moved_into_the_related_event_not_left_in_email_footer():
+    from app.generation.repair import repair_generated_package
+
+    e = event()
+    caveat = "Число затронутых пользователей неизвестно."
+    e.caveats = [caveat]
+    package = GeneratedPackage(
+        digest=(
+            "Дайджест за период.\n\n1. Атака на Альфу. Компания сообщила об атаке. "
+            "Источник: https://example.test/a1\n\nОговорки: " + caveat
+        ),
+        post=(
+            "1. Атака на Альфу. Краткое описание. https://example.test/a1"
+            "\n\nОговорки: " + caveat
+        ),
+        email_subject="Дайджест",
+    )
+
+    repaired = repair_generated_package(package, [e], "2026-10-04T12:00:00+03:00")
+    digest_event_paragraph = next(p for p in repaired.digest.split("\n\n") if "Атака на Альфу" in p)
+    post_event_paragraph = next(p for p in repaired.post.split("\n\n") if "Атака на Альфу" in p)
+    assert caveat in digest_event_paragraph
+    assert caveat in post_event_paragraph
+    assert not any(p.strip().lower().startswith("оговорки:") for p in repaired.digest.split("\n\n"))
+    assert not any(p.strip().lower().startswith("оговорки:") for p in repaired.post.split("\n\n"))
 
 
 def test_repair_package_restores_missing_events_and_caveats():
@@ -129,3 +163,85 @@ def test_repair_package_restores_missing_events_and_caveats():
     assert "https://example.test/b2" in repaired.digest
     assert "https://example.test/b2" in repaired.post
     assert "Число затронутых пользователей неизвестно." in repaired.post
+
+
+def test_extraction_config_limits_batch_size():
+    from app.config import Settings
+    assert Settings().extraction_batch_size == 2
+
+def test_openai_provider_can_enable_or_disable_transient_request_retries(monkeypatch):
+    import importlib
+    import sys
+    import types
+    constructed = []
+
+    class DummyClient:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+            self.responses = type("Responses", (), {"create": lambda self, **kwargs: None})()
+
+    fake_openai = types.ModuleType("openai")
+    fake_openai.OpenAI = DummyClient
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+    sys.modules.pop("app.ai.openai_provider", None)
+    provider_module = importlib.import_module("app.ai.openai_provider")
+    provider_module.OpenAIProvider("test-model", "key", retry_requests=False)
+    provider_module.OpenAIProvider("test-model", "key", retry_requests=True)
+    assert constructed[0]["max_retries"] == 0
+    assert constructed[1]["max_retries"] == 2
+
+    from app.models import Article
+    long_article = Article(
+        id="long", title="Тест", text=("Основной текст. " * 200) + "ВАЖНОЕ УТОЧНЕНИЕ В КОНЦЕ",
+        source="Test", url="https://example.test/long",
+    )
+    article_block = provider_module.OpenAIProvider._article_block(long_article, 1000)
+    assert "ВАЖНОЕ УТОЧНЕНИЕ В КОНЦЕ" in article_block
+    monkeypatch.delitem(sys.modules, "app.ai.openai_provider", raising=False)
+
+
+def test_models_support_extracted_event_batch():
+    from app.models import ExtractedEventBatch, ExtractedEventBatchItem, ExtractedEvent
+    e = ExtractedEvent(
+        title="Атака на Альфу", facts=[], affected_entities=[], consequences=[], caveats=[],
+        relevance=1, impact=1, scale=1, urgency=1, evidence_quality=1
+    )
+    batch = ExtractedEventBatch(events=[ExtractedEventBatchItem(event_id="event_1", event=e)])
+    assert batch.events[0].event_id == "event_1"
+
+
+
+def test_pipeline_keeps_outputs_when_ai_fact_check_fails(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from app import pipeline
+    from app.config import Settings
+
+    class FailingVerifier:
+        calls = 0
+        usage = {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+        def __getattr__(self, name):
+            return getattr(MockAI(), name)
+        def verify_package(self, package, events):
+            raise TimeoutError("fact-check timed out")
+
+    monkeypatch.setattr(pipeline, "get_ai", lambda settings: FailingVerifier())
+    data_path = Path(__file__).resolve().parents[1] / "data" / "test_publications_full.json"
+    out = tmp_path / "out"
+    result = pipeline.run(str(data_path), "2026-10-04T12:00:00+03:00", Settings(ai_mode="openai"), str(out))
+    assert result["validation_report"].passed is False
+    assert any("ai_fact_check_unavailable" in w for w in result["validation_warnings"])
+    assert (out / "digest.txt").exists()
+    assert (out / "post.txt").exists()
+    manifest = json.loads((out / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["validation_passed"] is False
+
+
+def test_pipeline_returns_validation_failure_without_raising(tmp_path):
+    from pathlib import Path
+    from app.pipeline import run
+    from app.config import Settings
+    data_path = Path(__file__).resolve().parents[1] / "data" / "test_publications_full.json"
+    result = run(str(data_path), "2026-10-04T12:00:00+03:00", Settings(ai_mode="mock"), str(tmp_path / "out"))
+    assert "validation_report" in result
+    assert "validation_errors" in result
